@@ -23,6 +23,8 @@ use chat_gpt_rs::prelude::*;
 use active_win_pos_rs::get_active_window;
 use dotenv::dotenv;
 
+pub mod tests;
+
 fn capture_window_screenshot() -> ImageBuffer<Rgba<u8>, Vec<u8>> {
 
     let hwnd;
@@ -128,11 +130,11 @@ async fn complete_text(text: &str, context: &str) -> String {
         model: Model::Gpt35Turbo,
         messages: vec![Message {
             role: "system".to_string(),
-            content: "You are a text completion bot designed to assist users with writing messages. Abide by the following:
+            content: "You are a text completion bot designed to assist users with writing messages and texts. Abide by the following:
             1. Don't erase or edit anything the user has already typed
             2. Don't repeat anything the user has already typed, instead, continue where they left off
             3. Try to only use information available in the OCR
-            4. Always do the best of your ability to autocomplete the user's message even if you are missing information.
+            4. Always try to autocomplete the user's message even if you are missing information.
             ".to_string(),
         }, Message {
             role: "user".to_string(),
@@ -152,7 +154,7 @@ async fn complete_text(text: &str, context: &str) -> String {
     return result;
 }
 
-fn update_clipboard(content: &str) {
+fn set_clipboard(content: &str) {
     unsafe {
         if OpenClipboard(ptr::null_mut()) == 0 {
             return;
@@ -172,6 +174,16 @@ fn update_clipboard(content: &str) {
     }
 }
 
+fn clear_clipboard() {
+    unsafe {
+        if OpenClipboard(ptr::null_mut()) == 0 {
+            return;
+        }
+        EmptyClipboard();
+        CloseClipboard();
+    }
+}
+
 fn paste_clipboard() {
     let mut enigo = Enigo::new();
     enigo.key_down(Key::Control);
@@ -183,6 +195,17 @@ fn get_tessdata_path() -> PathBuf {
     let mut data_path = PathBuf::from(ProjectDirs::from("com", "Edwinexd", "AnyComplete").unwrap().data_dir().to_str().unwrap());
     data_path.push("tessdata");
     return data_path;
+}
+
+fn remove_overlapping(input: &str, completion: &str) -> String {
+    // TODO: Take into account that GPT might use different special characters such as "In conclusion: " it may write "In conclusion, "
+    let completion_chars = completion.chars().collect::<Vec<char>>();
+    for i in (0..completion_chars.len()).rev() {
+        if input.ends_with(&completion_chars[..i].iter().collect::<String>()) {
+            return completion_chars[i..].iter().collect::<String>();
+        }
+    }
+    return completion.to_string();
 }
 
 async fn setup() {
@@ -217,17 +240,23 @@ async fn main() {
         let screenshot = capture_window_screenshot();
         let mut ocr = ocr.lock().unwrap();
         let ocr_result= ocr.perform_ocr(&screenshot);
+        let pre_clipboard = read_clipboard();
         execute_ctrl_a_c();
         match read_clipboard() {
             Some(s) => {
                 // Run complete_text async as sync
                 tokio::spawn(async move {
-                    let response = complete_text(&s, &ocr_result).await;
+                    let mut response = complete_text(&s, &ocr_result).await;
                     println!("Response: {}", &response);
-                    update_clipboard(&response);
+                    // Remove text that has been repeated by GPT
+                    response = remove_overlapping(&s, &response);
+                    set_clipboard(&response);
                     paste_clipboard();
                     // Restore clipboard contents
-                    update_clipboard(&s);
+                    match pre_clipboard {
+                        Some(pre_clipboard) => set_clipboard(&pre_clipboard),
+                        None => clear_clipboard(),
+                    }
                 });
             },
             None => println!("Failed to read clipboard"),
