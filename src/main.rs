@@ -1,15 +1,3 @@
-use enigo::Enigo;
-use enigo::Key;
-use enigo::KeyboardControllable;
-use leptess::LepTess;
-use reqwest::Url;
-use directories::{ProjectDirs};
-use win_screenshot::prelude::capture_window;
-use win_screenshot::prelude::Area;
-use image::{ImageBuffer, Rgba};
-use winapi::um::winbase::{GMEM_MOVEABLE, GlobalLock, GlobalUnlock, GlobalAlloc, GlobalSize};
-use winapi::um::winuser::CF_UNICODETEXT;
-use winapi::um::winuser::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData};
 use std::env;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -19,9 +7,20 @@ use std::os::windows::prelude::OsStringExt;
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::Mutex;
-use chat_gpt_rs::prelude::*;
-use active_win_pos_rs::get_active_window;
 use dotenv::dotenv;
+use reqwest::Url;
+use directories::ProjectDirs;
+use active_win_pos_rs::get_active_window;
+use image::{ImageBuffer, Rgba};
+use win_screenshot::prelude::{capture_window, Area};
+use leptess::LepTess;
+use enigo::Enigo;
+use enigo::Key;
+use enigo::KeyboardControllable;
+use winapi::um::winbase::{GMEM_MOVEABLE, GlobalLock, GlobalUnlock, GlobalAlloc, GlobalSize};
+use winapi::um::winuser::CF_UNICODETEXT;
+use winapi::um::winuser::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData};
+use chat_gpt_rs::prelude::{Token, Api, Request, Model, Message};
 
 pub mod tests;
 
@@ -90,6 +89,14 @@ fn execute_ctrl_a_c() {
     enigo.key_click(Key::RightArrow); // Deselect the text
 }
 
+fn execute_ctrl_z() {
+    let mut enigo = Enigo::new();
+
+    enigo.key_down(Key::Control);
+    enigo.key_click(Key::Layout('z'));
+    enigo.key_up(Key::Control);
+}
+
 fn read_clipboard() -> Option<String> {
     unsafe {
         // Open the clipboard
@@ -123,25 +130,25 @@ fn read_clipboard() -> Option<String> {
     }
 }
 // Complete the given text and context with openai chatgpt
-async fn complete_text(text: &str, context: &str) -> String {
+async fn complete_text(context: &str) -> String {
     let token = Token::new(env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"));
     let api = Api::new(token);
     let request = Request {
         model: Model::Gpt35Turbo,
         messages: vec![Message {
             role: "system".to_string(),
-            content: "You are a text completion bot designed to assist users with writing messages and texts. Abide by the following:
-            1. Don't erase or edit anything the user has already typed
-            2. Don't repeat anything the user has already typed, instead, continue where they left off
-            3. Try to only use information available in the OCR
-            4. Always try to autocomplete the user's message even if you are missing information.
+            content: "You are a text completion model. Abide by the following:
+            1. Complete the user's message from where their cursor is. The cursors position is dedonated with ### in the OCR
+            2. Don't erase or edit anything the user has already typed
+            3. Don't repeat anything the user has already typed, instead, continue where they left off at the cursors position.
+            4. Try to only use information available in the OCR.
+            5. Always try to autocomplete the user's message even if you are missing information.
+            6. Never a conversation and/or communicate with the user.
+            7. Never say \"Based on the OCR provided\" or similar.
             ".to_string(),
         }, Message {
             role: "user".to_string(),
             content: format!("OCR: {}", context),
-        }, Message {
-            role: "user".to_string(),
-            content: format!("Complete: {}", text),
         }
         ],
         temperature: Some(0.4),
@@ -208,6 +215,11 @@ fn remove_overlapping(input: &str, completion: &str) -> String {
     return completion.to_string();
 }
 
+fn paste_hashtags() {
+    set_clipboard("###");
+    paste_clipboard();
+}
+
 async fn setup() {
     // Load .env
     dotenv().ok();
@@ -237,30 +249,25 @@ async fn main() {
     
     let mut hk = hotkey::Listener::new();
     hk.register_hotkey(hotkey::modifiers::SHIFT |  hotkey::modifiers::SUPER, 'A' as u32, move || {
+        let pre_clipboard = read_clipboard();
+        // Paste filler characters to help GPT find our cursor location
+        paste_hashtags();
         let screenshot = capture_window_screenshot();
         let mut ocr = ocr.lock().unwrap();
         let ocr_result= ocr.perform_ocr(&screenshot);
-        let pre_clipboard = read_clipboard();
-        execute_ctrl_a_c();
-        match read_clipboard() {
-            Some(s) => {
-                // Run complete_text async as sync
-                tokio::spawn(async move {
-                    let mut response = complete_text(&s, &ocr_result).await;
-                    println!("Response: {}", &response);
-                    // Remove text that has been repeated by GPT
-                    response = remove_overlapping(&s, &response);
-                    set_clipboard(&response);
-                    paste_clipboard();
-                    // Restore clipboard contents
-                    match pre_clipboard {
-                        Some(pre_clipboard) => set_clipboard(&pre_clipboard),
-                        None => clear_clipboard(),
-                    }
-                });
-            },
-            None => println!("Failed to read clipboard"),
-        }
+        execute_ctrl_z();
+        // Run complete_text async as sync
+        tokio::spawn(async move {
+            let response = complete_text(&ocr_result).await;
+            println!("Response: {}", &response);
+            set_clipboard(&response);
+            paste_clipboard();
+            // Restore clipboard contents
+            match pre_clipboard {
+                Some(pre_clipboard) => set_clipboard(&pre_clipboard),
+                None => clear_clipboard(),
+            }
+        });
     }).unwrap();
     println!("Ready!");
     hk.listen();

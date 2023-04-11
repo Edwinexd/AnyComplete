@@ -1,5 +1,5 @@
 # AnyComplete - Complete messages anywhere with GPT
-AnyComplete is a tool designed to make typing easier by predicting what the user is going to type next. Uses Tesseract OCR to OCR the current application window, then passes it through GPT3.5-turbo along with text that has been entered to predict the rest of a message. The program is bound to the shortcut win-shift-a and works on any application window where the textbox support ctrl a & ctrl c.
+AnyComplete is a tool designed to make typing easier by predicting what the user is going to type next. Uses Tesseract OCR to OCR the current application window, then passes it through GPT3.5-turbo. The program is bound to the shortcut win-shift-a and works on any application window where the textbox support ctrl v + ctrl z.
 
 # Building
 AnyComplete is written in Rust and requires Leptess to be set up correctly. Please follow the instructions on the [Leptess](https://github.com/houqp/leptess) before building AnyComplete.
